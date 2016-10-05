@@ -4,62 +4,49 @@ create  table #tempd
       codConcepto int ,
       mes int ,
       anio int ,
-      estado int
+      estado int,
+	  monto decimal (18,2)
+	  
     )
 
 
 declare @an int 
 declare @mes int 
+declare @concepto int
 set @an = 2015
-set @mes = 0
-while @an <= datePart(year, getDate())
-    and @mes <= 12
+set @mes = 1
+set @concepto = 1
+while @an <= datePart(year, getDate())  --and @mes <= 12
     begin
-      
-        set @mes = @mes + 1		
-        
+
+	 while @concepto <=3
+	  BEGIN
+	  	
+	  
+      insert #tempd
+              ( codConcepto, mes, anio, estado, monto )
+      values  ( @concepto, -- codConcepto - int
+                @mes, -- mes - int
+                @an, -- anio - int
+                0, -- estado - int
+                0  -- monto - decimal
+                )  
+		 set @concepto =  @concepto +1
+	   end
        
-			
-		
-        insert  into #tempd
-                ( codConcepto, mes, anio, estado )
-        values  ( 1,
-					 -- mes - int
-                  @mes, -- anio - int
-                  @an, 0  -- estado - int
-                  )
-            
-			
-        if @mes = 12
-            begin
-                set @an = @an + 1
-                set @mes = 0
-            end
+	   set @concepto = 1
+
+	  declare @var int 
+	   set @var = @mes
+	   set @mes = @mes +1
+	   
+	   if @var =12
+	   BEGIN
+	   	 set @an = @an +1
+		 set @mes = 1
+	   END
 			 
     end
-
-insert  #tempd
-        ( codConcepto ,
-          mes ,
-          anio ,
-          estado
-        )
-        select  2 ,
-                mes ,
-                anio ,
-                estado
-        from    #tempd
-insert  #tempd
-        ( codConcepto ,
-          mes ,
-          anio ,
-          estado
-        )
-        select  3 ,
-                mes ,
-                anio ,
-                estado
-        from    #tempd where codConcepto =1
 
 
 --	drop table #tempd
