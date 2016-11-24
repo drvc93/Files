@@ -1,0 +1,376 @@
+SET QUOTED_IDENTIFIER OFF
+SET ANSI_NULLS ON
+GO
+CREATE PROCEDURE SP_TR_ACTDATOSREL_PAGOEJECUCION
+@Compania	varchar(8),
+@NumeroPago	numeric(18),
+@Secuencia	int,
+@NumeroDoc	numeric(18),
+@Voucher	varchar(12),
+@Usuario	varchar(20),
+@Fecha		Datetime
+AS
+
+Declare @Correl numeric(18), @Mensaje varchar(100), @FlagError varchar(1), @ModoPago varchar(2), @ContFc int,
+	@OpeEntidad int, @OpeEntidadSec int, @MontoComision decimal(20,6), @FlujoCaja varchar(5),
+	@TipoTransaccion varchar(3), @NombreFc varchar(40)
+
+set @FlagError = 'N'
+set @Mensaje = 'OK'
+Set @Voucher = ltrim(rtrim(@Voucher))
+
+select @ModoPago = c_modopago
+from tr_pago
+where c_compania = @Compania
+and n_numeropago = @NumeroPago
+and n_secuencia = @Secuencia
+
+if @ModoPago = 'PG'
+Begin
+	-- Obteniendo Correlativo de Transacción
+	select @Correl = n_ultimocorrelativo 
+	from ma_correlativos 
+	where c_compania = @Compania and c_tipodocumento = 'SY' 
+	and c_aplicacion = 'TR' and c_seriedocumento = 'TR'
+
+	set @Correl = @Correl + 1
+
+	-- Actualizando Correlativo de Transacción
+	update ma_correlativos 
+	set n_ultimocorrelativo = @Correl
+	where c_compania = @Compania and c_tipodocumento = 'SY'
+	and c_aplicacion = 'TR' and c_seriedocumento = 'TR'
+
+	if @@Error <> 0
+	Begin
+		set @Mensaje = 'Ocurrió un error actualizando correlativo de transacción banc.'
+		set @FlagError = 'S'
+	End
+	
+	if @FlagError = 'N'
+	Begin
+		create table #TransaccionBancTmp
+		( c_compania 		varchar(8),
+		  c_tipotransaccion	varchar(3),
+		  c_bancocodigo		varchar(4) null,
+		  c_ctabancaria		varchar(20) null,
+		  n_codproveedor	int,
+		  n_numeropago		numeric(18,0),
+		  n_secuenciapago	int,
+		  n_numerodocumento	numeric(18,0) null,
+		  d_fechatransaccion	datetime,
+		  c_periodo		varchar(6),
+		  c_voucher		varchar(12) null,
+		  c_moneda		varchar(1),
+		  n_monto		decimal(20,6),
+		  n_tipocambio		decimal(20,6),
+		  c_usuarioprep		varchar(20),
+		  d_fechapreparacion	datetime,
+		  c_docreferenciatrans	varchar(20) null,
+		  c_docreferenciabanco	varchar(20) null,
+		  c_fuente		varchar(3),
+		  c_flujocaja		varchar(5) null,
+		  c_estado		varchar(2),
+		  c_ultimousuariomod	varchar(20),
+		  d_ultimafechamod	datetime,
+		  c_descripcionfc	varchar(60) null,
+		  d_fechavencimientofc	datetime null,
+		  c_flagrestringirmod	varchar(1) not null default 'N',
+		  c_tipodocumento	varchar(3) not null,
+		  c_categoriapago	varchar(2) not null,
+		  n_opeentidad		int null,
+		  n_opeentidadSec	int null
+		)
+
+		create table #TransaccionBanc
+		( c_compania 		varchar(8),
+		  n_secuencia		int identity,
+		  c_tipotransaccion	varchar(3),
+		  c_bancocodigo		varchar(4) null,
+		  c_ctabancaria		varchar(20) null,
+		  n_codproveedor	int,
+		  n_numeropago		numeric(18,0),
+		  n_secuenciapago	int,
+		  n_numerodocumento	numeric(18,0) null,
+		  d_fechatransaccion	datetime,
+		  c_periodo		varchar(6),
+		  c_voucher		varchar(12) null,
+		  c_moneda		varchar(1),
+		  n_monto		decimal(20,6),
+		  n_tipocambio		decimal(20,6),
+		  c_usuarioprep		varchar(20),
+		  d_fechapreparacion	datetime,
+		  c_docreferenciatrans	varchar(20) null,
+		  c_docreferenciabanco	varchar(20) null,
+		  c_fuente		varchar(3),
+		  c_flujocaja		varchar(5) null,
+		  c_estado		varchar(2),
+		  c_ultimousuariomod	varchar(20),
+		  d_ultimafechamod	datetime,
+		  c_descripcionfc	varchar(60) null,
+		  d_fechavencimientofc	datetime null,
+		  c_flagrestringirmod	varchar(1) not null default 'N',
+		  n_opeentidad		int null,
+		  n_opeentidadSec	int null
+		)
+
+		insert into #TransaccionBancTmp
+		(c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+		 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+		 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+		 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+		 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, c_tipodocumento, c_categoriapago)
+		select @Compania, 'PAG', a.c_bancocodigo, a.c_ctabancaria, a.n_codproveedor,
+		a.n_numeropago, a.n_secuencia, @NumeroDoc, a.d_fechapago, 
+		(case when isnull(a.c_voucher,'') = '' then convert(varchar(6), a.d_fechapago,112) else substring(a.c_voucher,1,6) end),
+		substring(a.c_voucher,7,6), a.c_moneda, 
+		-- -1*(case when a.c_moneda = 'L' then b.n_montooperacionlocal else b.n_montooperacionext end) as n_montopago,
+		(case when c_flagcuotapagare = 'N' then 
+			-1*((case when a.c_moneda = 'L' then b.n_montooperacionlocal else b.n_montooperacionext end) - 
+				(case when b.c_flagtiporet = 'S' then (case when a.c_moneda = c.c_monedadoc then b.n_montoret else (case when c.c_monedadoc = 'L' then round(b.n_montoret/a.n_tipocambio,2) else round(b.n_montoret*a.n_tipocambio,2) end ) end) else 0 end )
+			     )
+					 else -1*b.n_montocuota end) as n_montopago,
+		a.n_tipocambio, @Usuario, @Fecha, c.c_tipodocumento +'-'+c.c_numerodocumento, 
+		convert(varchar, @NumeroPago)+'-'+convert(varchar, @Secuencia), 'PG', b.c_flujocaja, 'AP', @Usuario, @Fecha,
+		a.c_pagaranombre, (case when c.c_origen = 'OL' then c.d_fechavencimiento else null end),
+		b.c_flagcuotapagare, c.c_tipodocumento, 'GN'
+		from tr_pago a, tr_pagodetalle b, tr_obligacion c
+		where a.c_compania = b.c_compania
+		and a.n_numeropago = b.n_numeropago
+		and a.n_secuencia = b.n_secuencia
+		and b.c_compania = c.c_compania
+		and b.n_obligacion = c.n_obligacion
+		and a.c_compania = @Compania
+		and a.n_numeropago = @NumeroPago
+		and a.n_secuencia = @Secuencia
+		
+		insert into #TransaccionBancTmp
+		(c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+		 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+		 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+		 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+		 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, c_tipodocumento, c_categoriapago)
+		select @Compania, 'PAG', a.c_bancocodigo, a.c_ctabancaria, a.n_codproveedor,
+		a.n_numeropago, a.n_secuencia, @NumeroDoc, a.d_fechapago, 
+		(case when isnull(a.c_voucher,'') = '' then convert(varchar(6), a.d_fechapago,112) else substring(a.c_voucher,1,6) end),
+		substring(a.c_voucher,7,6), a.c_moneda, 
+		-1*isnull(b.n_interescuota,0) as n_montopago,
+		a.n_tipocambio, @Usuario, @Fecha, c.c_tipodocumento +'-'+c.c_numerodocumento, 
+		convert(varchar, @NumeroPago)+'-'+convert(varchar, @Secuencia), 'PG', Null, 'AP', @Usuario, @Fecha,
+		a.c_pagaranombre, (case when c.c_origen = 'OL' then c.d_fechavencimiento else null end),
+		b.c_flagcuotapagare, c.c_tipodocumento, 'IN'
+		from tr_pago a, tr_pagodetalle b, tr_obligacion c
+		where a.c_compania = b.c_compania
+		and a.n_numeropago = b.n_numeropago
+		and a.n_secuencia = b.n_secuencia
+		and b.c_compania = c.c_compania
+		and b.n_obligacion = c.n_obligacion
+		and a.c_compania = @Compania
+		and a.n_numeropago = @NumeroPago
+		and a.n_secuencia = @Secuencia
+		and b.c_flagcuotapagare = 'S'
+		and isnull(b.n_interescuota,0) <> 0
+		
+		insert into #TransaccionBancTmp
+		(c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+		 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+		 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+		 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+		 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, c_tipodocumento, c_categoriapago)
+		select @Compania, 'PAG', a.c_bancocodigo, a.c_ctabancaria, a.n_codproveedor,
+		a.n_numeropago, a.n_secuencia, @NumeroDoc, a.d_fechapago, 
+		(case when isnull(a.c_voucher,'') = '' then convert(varchar(6), a.d_fechapago,112) else substring(a.c_voucher,1,6) end),
+		substring(a.c_voucher,7,6), a.c_moneda, 
+		-1*isnull(b.n_otrosgastoscuota,0) as n_montopago,
+		a.n_tipocambio, @Usuario, @Fecha, c.c_tipodocumento +'-'+c.c_numerodocumento, 
+		convert(varchar, @NumeroPago)+'-'+convert(varchar, @Secuencia), 'PG', Null, 'AP', @Usuario, @Fecha,
+		a.c_pagaranombre, (case when c.c_origen = 'OL' then c.d_fechavencimiento else null end),
+		b.c_flagcuotapagare, c.c_tipodocumento, 'OG'
+		from tr_pago a, tr_pagodetalle b, tr_obligacion c
+		where a.c_compania = b.c_compania
+		and a.n_numeropago = b.n_numeropago
+		and a.n_secuencia = b.n_secuencia
+		and b.c_compania = c.c_compania
+		and b.n_obligacion = c.n_obligacion
+		and a.c_compania = @Compania
+		and a.n_numeropago = @NumeroPago
+		and a.n_secuencia = @Secuencia
+		and b.c_flagcuotapagare = 'S'
+		and isnull(b.n_otrosgastoscuota,0) <> 0
+
+		/************************************************************/
+		/* Ingresando Flujo de Caja de Comisión Factoring Proveedor */
+		/************************************************************/
+		select @OpeEntidad = n_correlativo, @OpeEntidadSec = n_secuencia
+		from tr_opeentidadcuotapago
+		where c_compania = @Compania
+		and n_numeropago = @NumeroPago
+		and n_secuenciapago = @Secuencia
+		and c_origen = 'PA'
+		and c_flagdocrelacionado = 'S'
+		
+		if isnull(@OpeEntidad,0) <> 0
+		Begin
+			-- Obteniendo Monto de Comisión
+			select @MontoComision = n_montointeresing from tr_operacionentidaddoc
+			where c_compania = @Compania
+			and n_correlativo = @OpeEntidad
+			and n_secuencia = @OpeEntidadSec
+
+			if isnull(@MontoComision, 0) > 0
+			Begin
+				-- Obteniendo Flujo de Caja
+				select @FlujoCaja = c_texto from ma_parametros
+				where c_compania = @Compania
+				and c_aplicacion = 'TR'
+				and c_parametrocodigo = 'FCCOMFP'
+				and c_estado = 'A'
+
+				if isnull(@FlujoCaja,'') = ''
+				Begin
+					set @Mensaje = 'Flujo de Caja no pudo ser obtenido. Ingreso comisión factoring proveedor.'
+					set @FlagError = 'S'
+				End
+
+				-- Obteniendo Tipo Transaccion
+				select @TipoTransaccion = c_texto from ma_parametros
+				where c_compania = @Compania
+				and c_aplicacion = 'TR'
+				and c_parametrocodigo = 'TTRANFP'
+				and c_estado = 'A'
+
+				if isnull(@TipoTransaccion,'') = ''
+				Begin
+					set @Mensaje = 'Tipo de Transacción no pudo ser obtenido. Ingreso comisión factoring proveedor.'
+					set @FlagError = 'S'
+				End
+
+				-- Obteniendo Descripion Flujo Caja
+				select @NombreFc = c_descripcion from ma_flujocaja
+				where c_flujocaja = @FlujoCaja
+
+				if isnull(@NombreFc,'') = ''
+				Begin
+					set @Mensaje = 'No se pudo obtener descripción del Flujo de Caja. Ingreso comisión factoring proveedor.'
+					set @FlagError = 'S'
+				End
+				
+				insert into #TransaccionBancTmp
+				(c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+				 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+				 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+				 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+				 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, c_tipodocumento, c_categoriapago,
+				 n_opeentidad, n_opeentidadsec)
+				select @Compania, @TipoTransaccion, a.c_bancocodigo, a.c_ctabancaria, a.n_codproveedor,
+				a.n_numeropago, a.n_secuencia, @NumeroDoc, a.d_fechapago, 
+				(case when isnull(a.c_voucher,'') = '' then convert(varchar(6), a.d_fechapago,112) else substring(a.c_voucher,1,6) end),
+				substring(a.c_voucher,7,6), a.c_moneda, 
+				@MontoComision,
+				a.n_tipocambio, @Usuario, @Fecha, c.c_tipodocumento +'-'+c.c_numerodocumento, 
+				convert(varchar, @NumeroPago)+'-'+convert(varchar, @Secuencia), 'PG', @FlujoCaja, 'AP', @Usuario, @Fecha,
+				Substring(@NombreFc + ' '+a.c_pagaranombre, 1, 60), null,
+				'S', c.c_tipodocumento, 'CF', @OpeEntidad, @OpeEntidadSec
+				from tr_pago a, tr_pagodetalle b, tr_obligacion c
+				where a.c_compania = b.c_compania
+				and a.n_numeropago = b.n_numeropago
+				and a.n_secuencia = b.n_secuencia
+				and b.c_compania = c.c_compania
+				and b.n_obligacion = c.n_obligacion
+				and a.c_compania = @Compania
+				and a.n_numeropago = @NumeroPago
+				and a.n_secuencia = @Secuencia
+			End
+		End
+		/************************************************************/
+		/************************************************************/
+
+		-- Eliminando registros que tengan el monto igual a cero.
+		delete #TransaccionBancTmp
+		where isnull(n_monto,0) = 0
+
+		update #TransaccionBancTmp
+		set c_flujocaja = b.c_flujocaja
+		from #TransaccionBancTmp a, ma_categoriapago_flujocaja b
+		where b.c_aplicacion = 'TR'
+		and a.c_bancocodigo = b.c_bancocodigo
+		and a.c_categoriapago = b.c_categoriapago
+		and a.c_tipodocumento = b.c_tipodocumento
+		and b.c_estado = 'A'
+
+		update #TransaccionBancTmp
+		set c_flujocaja = (case when isnull(c_flujocaja,'') = '' then Null else c_flujocaja end)
+
+		Set @ContFc = 0
+		select @ContFc = count(1)
+		from tr_cierreflujocaja a, #TransaccionBancTmp b
+		where a.c_compania = b.c_compania
+		and a.d_fecha >= convert(datetime, convert(varchar(8), b.d_fechatransaccion,112))
+		and a.c_estado = 'CE'
+		and isnull(b.c_flujocaja,'') <> ''
+		
+		if @ContFc > 0
+		Begin
+			set @Mensaje = 'Fecha del flujo de caja asociada o posterior se encuentra cerrada.'
+			set @FlagError = 'S'
+		End
+		Else
+		Begin
+			if @FlagError = 'N'
+			Begin
+				insert into #TransaccionBanc
+				(c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+				 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+				 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+				 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+				 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, n_opeentidad, n_opeentidadsec)
+				select c_compania, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+				 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, 
+				 c_moneda, n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, 
+				 c_docreferenciabanco, c_fuente, c_flujocaja, c_estado, c_ultimousuariomod, d_ultimafechamod, 
+				 c_descripcionfc, d_fechavencimientofc, c_flagrestringirmod, n_opeentidad, n_opeentidadsec
+				from #TransaccionBancTmp
+				order by n_numeropago, n_secuenciapago
+
+				-- Agregando registro en Transacciones Bancarias
+				insert into tr_transaccionctabanc
+				(c_compania, n_transaccion, n_secuencia, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+				 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, c_periodo, c_voucher, c_moneda,
+				 n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, c_docreferenciabanco, 
+				 c_fuente, c_flujocaja, d_fechafc, c_periodofc, n_tipocambiofc, c_descripcionfc, c_estadofc, c_flagmodmanual, 
+				 c_estado, c_ultimousuariomod, d_ultimafechamod, d_fechavencimientofc, c_flagrestringirmod, n_opeentidad, n_opeentidadsec)
+				select @Compania, @Correl, n_secuencia, c_tipotransaccion, c_bancocodigo, c_ctabancaria, n_codproveedor,
+				 n_numeropago, n_secuenciapago, n_numerodocumento, d_fechatransaccion, 
+				 (case when isnull(c_voucher,'') = '' and isnull(@Voucher,'') <> '' 
+					   then substring(@Voucher,1,6) else c_periodo end),
+				 (case when isnull(c_voucher,'') = '' and isnull(@Voucher,'') <> '' 
+					   then substring(@Voucher,7,10) else c_voucher end),
+				 c_moneda,
+				 n_monto, n_tipocambio, c_usuarioprep, d_fechapreparacion, c_docreferenciatrans, c_docreferenciabanco,
+				 c_fuente, c_flujocaja, convert(datetime, convert(varchar(8), d_fechatransaccion,112)), c_periodo, n_tipocambio, c_descripcionfc, 'AB', 'N', c_estado,
+				 c_ultimousuariomod, d_ultimafechamod, d_fechavencimientofc, c_flagrestringirmod, n_opeentidad, n_opeentidadsec
+				from #TransaccionBanc
+
+				if @@Error <> 0
+				Begin
+					set @Mensaje = 'Ocurrio un error ingresando la transacción bancaria.'
+					set @FlagError = 'S'
+				End
+			End
+		End
+	End	
+End
+	
+select @Mensaje
+
+
+
+
+
+
+
+
+
+
+
+GO
