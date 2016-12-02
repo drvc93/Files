@@ -1,0 +1,40 @@
+create  table #tempd
+    (
+      codConcepto int ,
+      mes int ,
+      anio int ,
+      estado int ,
+      monto decimal(18, 2)
+    );
+	--drop table #tempd
+declare @concepto int = null
+set @concepto = 1
+while @concepto <= 3
+    begin
+        insert  into #tempd
+                ( codConcepto ,
+                  mes ,
+                  anio ,
+                  estado ,
+                  monto
+                )
+                select  @concepto ,
+                        convert(int, substring(periodo, 5, 2)) ,
+                        convert(int, substring(periodo, 1, 4)) ,
+                        0 ,
+                        0
+                from    AC_PERIODO
+				
+			set @concepto = @concepto+1
+    end
+
+    update  #tempd
+    set     monto = p.Monto ,
+            estado = p.Estado
+    from    #tempd TP
+            inner join dbo.AC_PAGO p on p.codConcepto = TP.codConcepto
+                                        and p.NumeroPuesto = 80
+                                        and codigoSocio = 2
+										and TP.mes = datePart(month,FechaPago)
+										and TP.anio = datePart(year,FechaPago)
+   -- SELECT * FROM dbo.AC_PAGO
