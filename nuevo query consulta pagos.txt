@@ -2,6 +2,10 @@ create  table #tempd
     (
       codConcepto int ,
       mes int ,
+create   table #tempd
+    (
+      codConcepto int ,
+      mes int ,
       anio int ,
       estado int ,
       monto decimal(18, 2)
@@ -38,3 +42,11 @@ while @concepto <= 3
 										and TP.mes = datePart(month,FechaPago)
 										and TP.anio = datePart(year,FechaPago)
    -- SELECT * FROM dbo.AC_PAGO
+   update   #tempd
+   set      monto = AC_TARIFCONCEPTO_PERIODO.montatarifa
+   from     #tempd
+            left join AC_TARIFCONCEPTO_PERIODO on
+			 mes = DatePart(month,  FechaReg)
+			 and anio = DatePart(year,  FechaReg)
+			and #tempd.codConcepto = AC_TARIFCONCEPTO_PERIODO.codConcepto
+			 where    estado = 0
